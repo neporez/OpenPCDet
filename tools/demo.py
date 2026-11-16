@@ -16,6 +16,7 @@ from pcdet.datasets import DatasetTemplate
 from pcdet.models import build_network, load_data_to_gpu
 from pcdet.utils import common_utils
 import time
+import pickle
 
 class DemoDataset(DatasetTemplate):
     def __init__(self, dataset_cfg, class_names, training=True, root_path=None, logger=None, ext='.bin'):
@@ -33,7 +34,10 @@ class DemoDataset(DatasetTemplate):
 
     def __getitem__(self, index):
         if self.ext == '.bin':
-            points = np.fromfile(self.sample_file_list[index], dtype=np.float32).reshape(-1, 4)[:,:self.dataset_cfg.DATA_AUGMENTOR.AUG_CONFIG_LIST[0]['NUM_POINT_FEATURES']]
+            num_features = self.dataset_cfg.get('NUM_POINT_FEATURES', None)  # kriso configs
+            if num_features is None:
+                num_features = self.dataset_cfg.DATA_AUGMENTOR.AUG_CONFIG_LIST[0]['NUM_POINT_FEATURES']
+            points = np.fromfile(self.sample_file_list[index], dtype=np.float32).reshape(-1, 4)[:, :num_features]
         elif self.ext == '.npy':
             points = np.load(self.sample_file_list[index])
         else:
@@ -48,7 +52,7 @@ class DemoDataset(DatasetTemplate):
 
 def parse_config():
     parser = argparse.ArgumentParser(description='arg parser')
-    parser.add_argument('--cfg_file', type=str, default='cfgs/kitti_models/second.yaml',
+    parser.add_argument('--cfg_file', type=str, default='cfgs/kriso_models/kriso_voxelnext.yaml',
                         help='specify the config for demo')
     parser.add_argument('--data_path', type=str, default='demo_data',
                         help='specify the point cloud data file or directory')
@@ -56,9 +60,29 @@ def parse_config():
     parser.add_argument('--ext', type=str, default='.bin', help='specify the extension of your point cloud data file')
     parser.add_argument('--score_thresh', type=float, default=0.3,
                         help='score threshold for filtering predictions (default: 0.3)')
+    parser.add_argument('--show_gt', action='store_true', default=False,
+                        help='also draw the gt boxes (red; predictions are green). Needs --gt_info')
+    parser.add_argument('--gt_info', type=str, default=None,
+                        help='kriso infos pkl that holds the gt, e.g. ../data/kriso_ulsan/kriso_ulsan_infos_fold0_val.pkl; '
+                             'frames are matched by <sequence>/lidar_roof/<frame_id>.bin')
+    parser.add_argument('--view_file', type=str, default=None,
+                        help='camera view json: loaded when it exists, press V in the window to save the current camera '
+                             'to it (L reloads it)')
     args = parser.parse_args()
     cfg_from_yaml_file(args.cfg_file, cfg)
     return args, cfg
+
+
+def load_gt_boxes(info_path):
+    """{(sequence_id, frame_id): (N, 9) gt boxes} from a kriso infos pkl."""
+    with open(info_path, 'rb') as f:
+        infos = pickle.load(f)
+    return {(info['sequence_id'], str(info['frame_id'])): info['annos']['boxes_3d'] for info in infos if 'annos' in info}
+
+
+def find_gt_boxes(gt_boxes_dict, sample_file):
+    sample_file = Path(sample_file)
+    return gt_boxes_dict.get((sample_file.parent.parent.name, sample_file.stem))
 
 
 def filter_by_score(pred_dict, score_thresh):
@@ -81,6 +105,12 @@ def main():
     )
     logger.info(f'Total number of samples: \t{len(demo_dataset)}')
 
+    gt_boxes_dict = None
+    if args.show_gt:
+        assert args.gt_info is not None, '--show_gt needs --gt_info'
+        gt_boxes_dict = load_gt_boxes(args.gt_info)
+        logger.info(f'Loaded gt of {len(gt_boxes_dict)} frames from {args.gt_info}')
+
     model = build_network(model_cfg=cfg.MODEL, num_class=len(cfg.CLASS_NAMES), dataset=demo_dataset)
     model.load_params_from_file(filename=args.ckpt, logger=logger, to_cpu=True)
     model.cuda()
@@ -98,11 +128,24 @@ def main():
             logger.info(f'Predictions after score_thresh={args.score_thresh}: '
                         f'{len(filtered["pred_scores"])} / {len(pred_dicts[0]["pred_scores"])}')
 
+            gt_boxes = None
+            if gt_boxes_dict is not None:
+                gt_boxes = find_gt_boxes(gt_boxes_dict, demo_dataset.sample_file_list[idx])
+                if gt_boxes is None:
+                    logger.warning(f'No gt found for {demo_dataset.sample_file_list[idx]}')
+                else:
+                    logger.info(f'Drawing {len(gt_boxes)} gt boxes (red) and {len(filtered["pred_scores"])} predictions (green)')
+
             V.draw_scenes(
                 points=data_dict['points'][:, 1:],
+                gt_boxes=gt_boxes,
+                gt_color=(1, 0, 0),
+                view_file=args.view_file,
                 ref_boxes=filtered['pred_boxes'],
                 ref_scores=filtered['pred_scores'],
-                ref_labels=filtered['pred_labels']
+                ref_labels=filtered['pred_labels'],
+                point_size=2.0,
+                line_radius=0.1
             )
             if not OPEN3D_FLAG:
                 mlab.show(stop=True)

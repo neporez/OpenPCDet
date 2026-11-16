@@ -3,9 +3,32 @@ import math
 import copy
 from ...utils import common_utils
 from ...utils import box_utils
+from ...utils import box_rotation_utils
 
 
-def random_flip_along_x(gt_boxes, points, return_flip=False, enable=None):
+def transform_boxes_and_points_9dof(gt_boxes, points, transform):
+    """Apply an orthogonal 3x3 transform (rotation or reflection) to 9-DoF boxes and points.
+
+    gt_boxes: (N, 9+) [x, y, z, dx, dy, dz, yaw, roll, pitch, ...] with the std convention
+    (R = Rz(yaw) Ry(pitch) Rx(roll), see utils/box_rotation_utils.py); points: (M, 3 + C).
+    For a reflection the box frame would become left-handed, so the local y axis is negated; the box is
+    symmetric, so it describes the same box, and the heading (local x axis) is kept.
+    """
+    transform = np.asarray(transform, dtype=np.float64)
+    points[:, :3] = points[:, :3] @ transform.T
+    if gt_boxes.shape[0] == 0:
+        return gt_boxes, points
+    rot = box_rotation_utils.boxes_to_rotation_matrices(gt_boxes)
+    new_rot = transform @ rot
+    if np.linalg.det(transform) < 0:
+        new_rot = new_rot @ np.diag([1.0, -1.0, 1.0])
+    gt_boxes[:, 0:3] = gt_boxes[:, 0:3] @ transform.T
+    yaw, roll, pitch = box_rotation_utils.matrix_to_std_euler(new_rot)
+    gt_boxes[:, 6], gt_boxes[:, 7], gt_boxes[:, 8] = yaw, roll, pitch
+    return gt_boxes, points
+
+
+def random_flip_along_x(gt_boxes, points, return_flip=False, enable=None, box_dof=7):
     """
     Args:
         gt_boxes: (N, 7 + C), [x, y, z, dx, dy, dz, heading, [vx], [vy]]
@@ -14,7 +37,9 @@ def random_flip_along_x(gt_boxes, points, return_flip=False, enable=None):
     """
     if enable is None:
         enable = np.random.choice([False, True], replace=False, p=[0.5, 0.5])
-    if enable:
+    if enable and box_dof == 9:
+        gt_boxes, points = transform_boxes_and_points_9dof(gt_boxes, points, np.diag([1.0, -1.0, 1.0]))
+    elif enable:
         gt_boxes[:, 1] = -gt_boxes[:, 1]
         gt_boxes[:, 6] = -gt_boxes[:, 6]
         points[:, 1] = -points[:, 1]
@@ -26,7 +51,7 @@ def random_flip_along_x(gt_boxes, points, return_flip=False, enable=None):
     return gt_boxes, points
 
 
-def random_flip_along_y(gt_boxes, points, return_flip=False, enable=None):
+def random_flip_along_y(gt_boxes, points, return_flip=False, enable=None, box_dof=7):
     """
     Args:
         gt_boxes: (N, 7 + C), [x, y, z, dx, dy, dz, heading, [vx], [vy]]
@@ -35,7 +60,9 @@ def random_flip_along_y(gt_boxes, points, return_flip=False, enable=None):
     """
     if enable is None:
         enable = np.random.choice([False, True], replace=False, p=[0.5, 0.5])
-    if enable:
+    if enable and box_dof == 9:
+        gt_boxes, points = transform_boxes_and_points_9dof(gt_boxes, points, np.diag([-1.0, 1.0, 1.0]))
+    elif enable:
         gt_boxes[:, 0] = -gt_boxes[:, 0]
         gt_boxes[:, 6] = -(gt_boxes[:, 6] + np.pi)
         points[:, 0] = -points[:, 0]
@@ -47,7 +74,7 @@ def random_flip_along_y(gt_boxes, points, return_flip=False, enable=None):
     return gt_boxes, points
 
 
-def global_rotation(gt_boxes, points, rot_range, return_rot=False, noise_rotation=None):
+def global_rotation(gt_boxes, points, rot_range, return_rot=False, noise_rotation=None, box_dof=7):
     """
     Args:
         gt_boxes: (N, 7 + C), [x, y, z, dx, dy, dz, heading, [vx], [vy]]
@@ -57,6 +84,11 @@ def global_rotation(gt_boxes, points, rot_range, return_rot=False, noise_rotatio
     """
     if noise_rotation is None: 
         noise_rotation = np.random.uniform(rot_range[0], rot_range[1])
+    if box_dof == 9:
+        cos_a, sin_a = np.cos(noise_rotation), np.sin(noise_rotation)
+        rot_z = np.array([[cos_a, -sin_a, 0.0], [sin_a, cos_a, 0.0], [0.0, 0.0, 1.0]])
+        gt_boxes, points = transform_boxes_and_points_9dof(gt_boxes, points, rot_z)
+        return (gt_boxes, points, noise_rotation) if return_rot else (gt_boxes, points)
     points = common_utils.rotate_points_along_z(points[np.newaxis, :, :], np.array([noise_rotation]))[0]
     gt_boxes[:, 0:3] = common_utils.rotate_points_along_z(gt_boxes[np.newaxis, :, 0:3], np.array([noise_rotation]))[0]
     gt_boxes[:, 6] += noise_rotation
@@ -71,7 +103,7 @@ def global_rotation(gt_boxes, points, rot_range, return_rot=False, noise_rotatio
     return gt_boxes, points
 
 
-def global_scaling(gt_boxes, points, scale_range, return_scale=False):
+def global_scaling(gt_boxes, points, scale_range, return_scale=False, box_dof=7):
     """
     Args:
         gt_boxes: (N, 7), [x, y, z, dx, dy, dz, heading]
@@ -84,7 +116,7 @@ def global_scaling(gt_boxes, points, scale_range, return_scale=False):
     noise_scale = np.random.uniform(scale_range[0], scale_range[1])
     points[:, :3] *= noise_scale
     gt_boxes[:, :6] *= noise_scale
-    if gt_boxes.shape[1] > 7:
+    if gt_boxes.shape[1] > 7 and box_dof != 9:  # columns 7.. are velocities, in 9-DoF they are roll/pitch
         gt_boxes[:, 7:] *= noise_scale
         
     if return_scale:

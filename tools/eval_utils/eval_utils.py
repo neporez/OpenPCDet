@@ -19,7 +19,9 @@ def statistics_info(cfg, ret_dict, metric, disp_dict):
         '(%d, %d) / %d' % (metric['recall_roi_%s' % str(min_thresh)], metric['recall_rcnn_%s' % str(min_thresh)], metric['gt_num'])
 
 
-def eval_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_test=False, result_dir=None):
+def eval_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_test=False, result_dir=None, eval_tag=None):
+    """eval_tag: shown in the log headers, e.g. 'val: cross_site_val' (default: the dataset split)"""
+    eval_tag = eval_tag if eval_tag is not None else getattr(dataloader.dataset, 'split', None)
     result_dir.mkdir(parents=True, exist_ok=True)
 
     final_output_dir = result_dir / 'final_result' / 'data'
@@ -41,7 +43,7 @@ def eval_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_test=Fal
         start_iter = int(len(dataloader) * 0.1)
         infer_time_meter = common_utils.AverageMeter()
 
-    logger.info('*************** EPOCH %s EVALUATION *****************' % epoch_id)
+    logger.info('*************** EPOCH %s EVALUATION%s *****************' % (epoch_id, ' (%s)' % eval_tag if eval_tag else ''))
     if dist_test:
         num_gpus = torch.cuda.device_count()
         local_rank = cfg.LOCAL_RANK % num_gpus
@@ -90,7 +92,7 @@ def eval_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_test=Fal
         det_annos = common_utils.merge_results_dist(det_annos, len(dataset), tmpdir=result_dir / 'tmpdir')
         metric = common_utils.merge_results_dist([metric], world_size, tmpdir=result_dir / 'tmpdir')
 
-    logger.info('*************** Performance of EPOCH %s *****************' % epoch_id)
+    logger.info('*************** Performance of EPOCH %s%s *****************' % (epoch_id, ' (%s)' % eval_tag if eval_tag else ''))
     sec_per_example = (time.time() - start_time) / len(dataloader.dataset)
     logger.info('Generate label finished(sec_per_example: %.4f second).' % sec_per_example)
 

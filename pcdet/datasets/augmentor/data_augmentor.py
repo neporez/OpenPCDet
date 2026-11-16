@@ -3,7 +3,7 @@ from functools import partial
 import numpy as np
 from PIL import Image
 
-from ...utils import common_utils
+from ...utils import common_utils, box_rotation_utils
 from . import augmentor_utils, database_sampler
 
 
@@ -60,7 +60,7 @@ class DataAugmentor(object):
         for cur_axis in config['ALONG_AXIS_LIST']:
             assert cur_axis in ['x', 'y']
             gt_boxes, points, enable = getattr(augmentor_utils, 'random_flip_along_%s' % cur_axis)(
-                gt_boxes, points, return_flip=True
+                gt_boxes, points, return_flip=True, box_dof=config.get('BOX_DOF', 7)
             )
             data_dict['flip_%s'%cur_axis] = enable
             if 'roi_boxes' in data_dict.keys():
@@ -81,7 +81,8 @@ class DataAugmentor(object):
         if not isinstance(rot_range, list):
             rot_range = [-rot_range, rot_range]
         gt_boxes, points, noise_rot = augmentor_utils.global_rotation(
-            data_dict['gt_boxes'], data_dict['points'], rot_range=rot_range, return_rot=True
+            data_dict['gt_boxes'], data_dict['points'], rot_range=rot_range, return_rot=True,
+            box_dof=config.get('BOX_DOF', 7)
         )
         if 'roi_boxes' in data_dict.keys():
             num_frame, num_rois,dim = data_dict['roi_boxes'].shape
@@ -105,7 +106,8 @@ class DataAugmentor(object):
             data_dict['roi_boxes'] = roi_boxes
         else:
             gt_boxes, points, noise_scale = augmentor_utils.global_scaling(
-                data_dict['gt_boxes'], data_dict['points'], config['WORLD_SCALE_RANGE'], return_scale=True
+                data_dict['gt_boxes'], data_dict['points'], config['WORLD_SCALE_RANGE'], return_scale=True,
+                box_dof=config.get('BOX_DOF', 7)
             )
 
         data_dict['gt_boxes'] = gt_boxes
@@ -202,6 +204,53 @@ class DataAugmentor(object):
 
         data_dict['gt_boxes'] = gt_boxes
         data_dict['points'] = points
+        return data_dict
+
+    def random_box_point_dropout(self, data_dict=None, config=None):
+        """Randomly drop a fraction of the points INSIDE each gt box (the background is untouched).
+
+        Simulated objects come out denser and cleaner than real returns, so thinning them makes the
+        model lean less on the exact point density of an object.
+
+        Config:
+            DROP_RATIO_RANGE: [0.0, 0.1]   fraction dropped per box, drawn uniformly per box
+            PROBABILITY: 1.0               per-box chance of applying it (default 1.0)
+            MIN_POINTS: 5                  never leave a box with fewer points than this (default 1)
+        """
+        if data_dict is None:
+            return partial(self.random_box_point_dropout, config=config)
+
+        points, gt_boxes = data_dict['points'], data_dict['gt_boxes']
+        if len(points) == 0 or len(gt_boxes) == 0:
+            return data_dict
+
+        low, high = config['DROP_RATIO_RANGE']
+        per_box_prob = config.get('PROBABILITY', 1.0)
+        min_points = int(config.get('MIN_POINTS', 1))
+
+        drop_mask = np.zeros(len(points), dtype=bool)
+        use_9dof = config.get('BOX_DOF', 7) == 9
+        for box in gt_boxes:
+            if np.random.rand() > per_box_prob:
+                continue
+            if use_9dof:
+                inside_box = box_rotation_utils.points_in_boxes_9dof(points[:, :3], box[None, :9])[0]
+                inside = np.where(inside_box & ~drop_mask)[0]
+            else:
+                cx, cy, cz, dx, dy, dz, heading = box[:7]
+                shifted = points[:, :3] - np.array([cx, cy, cz])
+                cos_a, sin_a = np.cos(-heading), np.sin(-heading)
+                local_x = cos_a * shifted[:, 0] - sin_a * shifted[:, 1]
+                local_y = sin_a * shifted[:, 0] + cos_a * shifted[:, 1]
+                inside = np.where((np.abs(local_x) <= dx / 2) & (np.abs(local_y) <= dy / 2)
+                                  & (np.abs(shifted[:, 2]) <= dz / 2) & ~drop_mask)[0]
+            num_drop = int(round(len(inside) * np.random.uniform(low, high)))
+            num_drop = min(num_drop, max(len(inside) - min_points, 0))
+            if num_drop > 0:
+                drop_mask[np.random.choice(inside, num_drop, replace=False)] = True
+
+        if drop_mask.any():
+            data_dict['points'] = points[~drop_mask]
         return data_dict
 
     def random_world_frustum_dropout(self, data_dict=None, config=None):

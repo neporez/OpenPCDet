@@ -1,0 +1,267 @@
+DATASET: 'KrisoDataset'
+DATA_PATH: '../data/kriso_ulsan'
+
+POINT_CLOUD_RANGE: [-200, -200, -40, 200, 200, 40]
+
+# 7: yaw-only boxes, 9: [.., yaw, roll, pitch] (needs the tilt head in the model)
+BOX_DOF: 9
+# which boxes count as labels (pcdet/utils/visibility_utils.py): points >= ABS_POINTS, or
+# points / expected >= RATIO with expected = C * visible_area / distance^2 and C = 1 / (azimuth step * elevation step)
+# from SENSOR (real LiDAR: Ouster OS2-128, 2048 x 10 mode, 22.5 deg vertical FOV -> C = 105,413 points/sr), i.e. RATIO is
+# the share of the theoretically possible returns (median of the real labels 0.23).
+# The same rule is used for training labels, for the gt_sampling database and (EVAL_IGNORE_NON_LABELS) for evaluation.
+LABEL_FILTER: {
+    RATIO: 0.1,
+    ABS_POINTS: 50,
+    SENSOR: {CHANNELS: 128, V_FOV_DEG: 22.5, COLUMNS: 2048}
+}
+# TRAINING rule (training labels + gt_sampling database); evaluation ALWAYS uses LABEL_FILTER above. Same as LABEL_FILTER by
+# default; override per run, e.g. --set DATA_CONFIG.TRAIN_LABEL_FILTER.RATIO 0.2 DATA_CONFIG.TRAIN_LABEL_FILTER.ABS_POINTS 1000000000
+TRAIN_LABEL_FILTER: {
+    RATIO: 0.1,
+    ABS_POINTS: 50,
+    SENSOR: {CHANNELS: 128, V_FOV_DEG: 22.5, COLUMNS: 2048}
+}
+# multi-frame accumulation (2026-11-12): NUM_FRAMES 1 = off; 3 = frame + previous + next labelled frame of the same scene
+# (ulsan_1105 only, ICP scene poses in ImageSets/scene_poses_1105.csv), in training AND evaluation.
+# Override per run: --set DATA_CONFIG.ACCUMULATE.NUM_FRAMES 3
+ACCUMULATE: {NUM_FRAMES: 1, POSES: scene_poses_1105.csv}
+# boxes that are not labels: removed from training, "don't care" in evaluation (neither missed nor false positive)
+EVAL_IGNORE_NON_LABELS: True
+# GT outside POINT_CLOUD_RANGE is dropped from evaluation because the model cannot predict it
+EVAL_FILTER_GT_BY_RANGE: True
+# > 0: gt boxes longer than this (m) are "don't care" in evaluation (cross_site_val: jangsaeng's > 40 m ships have no
+# counterpart in the training site; set with --set DATA_CONFIG.EVAL_IGNORE_LENGTH_ABOVE 40.0); -1 = off
+EVAL_IGNORE_LENGTH_ABOVE: -1.0
+# TP / FP / FN tables (and tensorboard TP_ / FP_ / FN_ values) are counted at this score threshold (AP uses all thresholds)
+EVAL_COUNT_SCORE_THRESH: 0.3
+# True: 7-DoF predictions are padded with roll = pitch = 0 and scored with the 6-DoF IoU against the tilted gt
+# (False: a 7-DoF prediction is scored with the yaw-only IoU, the gt tilt is ignored)
+EVAL_FORCE_6DOF: False
+NUM_POINT_FEATURES: 3
+
+# kriso_ulsan: final real data (ulsan 0609 1,077 frames + ulsan 1105 1,587 frames), 5-fold cross validation.
+# pick the fold with --set DATA_CONFIG.DATA_SPLIT.train fold<k>_train DATA_CONFIG.DATA_SPLIT.test fold<k>_val
+# (folds built by `python -m pcdet.datasets.kriso.make_folds`; membership in ImageSets/folds.csv)
+DATA_SPLIT: {
+    'train': fold0_train,
+    'test': fold0_val
+}
+
+# region-based k-fold of Bangeojin port (pcdet/datasets/kriso/make_region_folds.py, region_utils.py)
+REGION_FILE: bangeojin_regions.json
+
+INFO_PATH: {
+    # region-based 5-fold (val = one sector of the harbour, cut out of the training frames)
+    'bangeojin_all': [kriso_ulsan_infos_bangeojin_all.pkl],   # all 2,296 Bangeojin frames (0609 + 1105 cw/ccw + jangsaeng-bag scene_000): deployment training
+    'bangeojin_all_yaw1000': [kriso_ulsan_infos_bangeojin_all.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],   # deployment: all Bangeojin + yaw sim
+    'bangeojin_all_yaw2000': [kriso_ulsan_infos_bangeojin_all.pkl, kriso_ulsan_infos_sim_yaw2000.pkl],   # deployment: all Bangeojin + yaw sim
+    'bangeojin_all_yaw3000': [kriso_ulsan_infos_bangeojin_all.pkl, kriso_ulsan_infos_sim_yaw3000.pkl],   # deployment: all Bangeojin + yaw sim
+    'region10_0_train_yaw1000': [kriso_ulsan_infos_region10_0_train.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],
+    'region10_1_train_yaw1000': [kriso_ulsan_infos_region10_1_train.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],
+    'region10_2_train_yaw1000': [kriso_ulsan_infos_region10_2_train.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],
+    'region10_3_train_yaw1000': [kriso_ulsan_infos_region10_3_train.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],
+    'region10_4_train_yaw1000': [kriso_ulsan_infos_region10_4_train.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],
+    'sim_yaw2000': [kriso_ulsan_infos_sim_yaw2000.pkl],
+    'region10_0_train_yaw2000': [kriso_ulsan_infos_region10_0_train.pkl, kriso_ulsan_infos_sim_yaw2000.pkl],
+    'region10_1_train_yaw2000': [kriso_ulsan_infos_region10_1_train.pkl, kriso_ulsan_infos_sim_yaw2000.pkl],
+    'region10_2_train_yaw2000': [kriso_ulsan_infos_region10_2_train.pkl, kriso_ulsan_infos_sim_yaw2000.pkl],
+    'region10_3_train_yaw2000': [kriso_ulsan_infos_region10_3_train.pkl, kriso_ulsan_infos_sim_yaw2000.pkl],
+    'region10_4_train_yaw2000': [kriso_ulsan_infos_region10_4_train.pkl, kriso_ulsan_infos_sim_yaw2000.pkl],
+    'region10_0_train_yaw3000': [kriso_ulsan_infos_region10_0_train.pkl, kriso_ulsan_infos_sim_yaw3000.pkl],
+    'region10_1_train_yaw3000': [kriso_ulsan_infos_region10_1_train.pkl, kriso_ulsan_infos_sim_yaw3000.pkl],
+    'region10_2_train_yaw3000': [kriso_ulsan_infos_region10_2_train.pkl, kriso_ulsan_infos_sim_yaw3000.pkl],
+    'region10_3_train_yaw3000': [kriso_ulsan_infos_region10_3_train.pkl, kriso_ulsan_infos_sim_yaw3000.pkl],
+    'region10_4_train_yaw3000': [kriso_ulsan_infos_region10_4_train.pkl, kriso_ulsan_infos_sim_yaw3000.pkl],
+    # region10_* = 10-sector interleaved 5-fold (2026-11-12, REGION_FILE bangeojin_regions10.json, poses v2 incl. the jangsaeng-bag scene_000)
+    'region10_0_train': [kriso_ulsan_infos_region10_0_train.pkl], 'region10_0_val': [kriso_ulsan_infos_region10_0_val.pkl], 'region10_0_train_eval': [kriso_ulsan_infos_region10_0_train_eval.pkl],
+    'region10_1_train': [kriso_ulsan_infos_region10_1_train.pkl], 'region10_1_val': [kriso_ulsan_infos_region10_1_val.pkl], 'region10_1_train_eval': [kriso_ulsan_infos_region10_1_train_eval.pkl],
+    'region10_2_train': [kriso_ulsan_infos_region10_2_train.pkl], 'region10_2_val': [kriso_ulsan_infos_region10_2_val.pkl], 'region10_2_train_eval': [kriso_ulsan_infos_region10_2_train_eval.pkl],
+    'region10_3_train': [kriso_ulsan_infos_region10_3_train.pkl], 'region10_3_val': [kriso_ulsan_infos_region10_3_val.pkl], 'region10_3_train_eval': [kriso_ulsan_infos_region10_3_train_eval.pkl],
+    'region10_4_train': [kriso_ulsan_infos_region10_4_train.pkl], 'region10_4_val': [kriso_ulsan_infos_region10_4_val.pkl], 'region10_4_train_eval': [kriso_ulsan_infos_region10_4_train_eval.pkl],
+    'region0_train': [kriso_ulsan_infos_region0_train.pkl], 'region0_val': [kriso_ulsan_infos_region0_val.pkl], 'region0_train_eval': [kriso_ulsan_infos_region0_train_eval.pkl],
+    'region1_train': [kriso_ulsan_infos_region1_train.pkl], 'region1_val': [kriso_ulsan_infos_region1_val.pkl], 'region1_train_eval': [kriso_ulsan_infos_region1_train_eval.pkl],
+    'region2_train': [kriso_ulsan_infos_region2_train.pkl], 'region2_val': [kriso_ulsan_infos_region2_val.pkl], 'region2_train_eval': [kriso_ulsan_infos_region2_train_eval.pkl],
+    'region3_train': [kriso_ulsan_infos_region3_train.pkl], 'region3_val': [kriso_ulsan_infos_region3_val.pkl], 'region3_train_eval': [kriso_ulsan_infos_region3_train_eval.pkl],
+    'region4_train': [kriso_ulsan_infos_region4_train.pkl], 'region4_val': [kriso_ulsan_infos_region4_val.pkl], 'region4_train_eval': [kriso_ulsan_infos_region4_train_eval.pkl],
+    # data efficiency: val region 2, training only on regions 0 + 1 (make_region_subset.py), with / without sim
+    'region2_train_r01': [kriso_ulsan_infos_region2_train_r01.pkl],
+    'region2_train_r01_eval': [kriso_ulsan_infos_region2_train_r01_eval.pkl],
+    'region2_train_r01_yaw1000': [kriso_ulsan_infos_region2_train_r01.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],
+    'region1_train_r04': [kriso_ulsan_infos_region1_train_r04.pkl],
+    'region1_train_r04_eval': [kriso_ulsan_infos_region1_train_r04_eval.pkl],
+    'region1_train_r04_yaw1000': [kriso_ulsan_infos_region1_train_r04.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],
+    'region4_train_r23': [kriso_ulsan_infos_region4_train_r23.pkl],
+    'region4_train_r23_eval': [kriso_ulsan_infos_region4_train_r23_eval.pkl],
+    'region4_train_r23_yaw1000': [kriso_ulsan_infos_region4_train_r23.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],
+    # real (region fold k training) + simulated yaw frames: region{k}_train_yaw{1000,3000,5000}
+    'region4_train_yaw5000': [kriso_ulsan_infos_region4_train.pkl, kriso_ulsan_infos_sim_yaw.pkl],
+    'region4_train_yaw3000': [kriso_ulsan_infos_region4_train.pkl, kriso_ulsan_infos_sim_yaw3000.pkl],
+    'region4_train_yaw1000': [kriso_ulsan_infos_region4_train.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],
+    'region3_train_yaw5000': [kriso_ulsan_infos_region3_train.pkl, kriso_ulsan_infos_sim_yaw.pkl],
+    'region3_train_yaw3000': [kriso_ulsan_infos_region3_train.pkl, kriso_ulsan_infos_sim_yaw3000.pkl],
+    'region3_train_yaw1000': [kriso_ulsan_infos_region3_train.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],
+    'region2_train_yaw5000': [kriso_ulsan_infos_region2_train.pkl, kriso_ulsan_infos_sim_yaw.pkl],
+    'region2_train_yaw3000': [kriso_ulsan_infos_region2_train.pkl, kriso_ulsan_infos_sim_yaw3000.pkl],
+    'region2_train_yaw1000': [kriso_ulsan_infos_region2_train.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],
+    'region1_train_yaw5000': [kriso_ulsan_infos_region1_train.pkl, kriso_ulsan_infos_sim_yaw.pkl],
+    'region1_train_yaw3000': [kriso_ulsan_infos_region1_train.pkl, kriso_ulsan_infos_sim_yaw3000.pkl],
+    'region1_train_yaw1000': [kriso_ulsan_infos_region1_train.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],
+    'region0_train_yaw5000': [kriso_ulsan_infos_region0_train.pkl, kriso_ulsan_infos_sim_yaw.pkl],
+    'region0_train_yaw3000': [kriso_ulsan_infos_region0_train.pkl, kriso_ulsan_infos_sim_yaw3000.pkl],
+    'region0_train_yaw1000': [kriso_ulsan_infos_region0_train.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],
+
+    'real': [kriso_ulsan_infos_real.pkl],                # all real frames (final model)
+    'real_v3': [kriso_ulsan_infos_real_v3.pkl],          # 2026-11-13: ulsan_0609 + ulsan_1105_1106 (re-exported labels: refined heights, roll/pitch, erase regions; 3,030 frames)
+    'regionv3_0_train': [kriso_ulsan_infos_regionv3_0_train.pkl], 'regionv3_0_val': [kriso_ulsan_infos_regionv3_0_val.pkl], 'regionv3_0_train_eval': [kriso_ulsan_infos_regionv3_0_train_eval.pkl],
+    'regionv3_1_train': [kriso_ulsan_infos_regionv3_1_train.pkl], 'regionv3_1_val': [kriso_ulsan_infos_regionv3_1_val.pkl], 'regionv3_1_train_eval': [kriso_ulsan_infos_regionv3_1_train_eval.pkl],
+    'regionv3_2_train': [kriso_ulsan_infos_regionv3_2_train.pkl], 'regionv3_2_val': [kriso_ulsan_infos_regionv3_2_val.pkl], 'regionv3_2_train_eval': [kriso_ulsan_infos_regionv3_2_train_eval.pkl],
+    'regionv3_3_train': [kriso_ulsan_infos_regionv3_3_train.pkl], 'regionv3_3_val': [kriso_ulsan_infos_regionv3_3_val.pkl], 'regionv3_3_train_eval': [kriso_ulsan_infos_regionv3_3_train_eval.pkl],
+    'regionv3_4_train': [kriso_ulsan_infos_regionv3_4_train.pkl], 'regionv3_4_val': [kriso_ulsan_infos_regionv3_4_val.pkl], 'regionv3_4_train_eval': [kriso_ulsan_infos_regionv3_4_train_eval.pkl],
+    # dataset v4 (2026-11-13: 0609 re-labelled as world labels = ulsan_0609_world + ulsan_1105_1106), region folds regionv4_{k}
+    'real_v4': [kriso_ulsan_infos_real_v4.pkl],
+    'jangsaengpo_v4': [kriso_ulsan_infos_jangsaengpo_v4.pkl],   # the 682 Jangsaengpo frames of real_v4 (training data of the deployment model; eval for inspection)
+    'heldout_junc_s001': [kriso_ulsan_infos_heldout_junc_s001.pkl],
+    'heldout_junc_s001_gt000': [kriso_ulsan_infos_heldout_junc_s001_gt000.pkl],   # same frames, GT = scene_000 reviewed labels moved into scene_001 (structure ICP)   # 2026-11-14: jun_c scene_001 (NOT in v4; 18 unreviewed init labels as rough GT) for visual checks
+    'regionv4_0_train': [kriso_ulsan_infos_regionv4_0_train.pkl], 'regionv4_0_val': [kriso_ulsan_infos_regionv4_0_val.pkl], 'regionv4_0_train_eval': [kriso_ulsan_infos_regionv4_0_train_eval.pkl],
+    'regionv4_1_train': [kriso_ulsan_infos_regionv4_1_train.pkl], 'regionv4_1_val': [kriso_ulsan_infos_regionv4_1_val.pkl], 'regionv4_1_train_eval': [kriso_ulsan_infos_regionv4_1_train_eval.pkl],
+    'regionv4_2_train': [kriso_ulsan_infos_regionv4_2_train.pkl], 'regionv4_2_val': [kriso_ulsan_infos_regionv4_2_val.pkl], 'regionv4_2_train_eval': [kriso_ulsan_infos_regionv4_2_train_eval.pkl],
+    'regionv4_3_train': [kriso_ulsan_infos_regionv4_3_train.pkl], 'regionv4_3_val': [kriso_ulsan_infos_regionv4_3_val.pkl], 'regionv4_3_train_eval': [kriso_ulsan_infos_regionv4_3_train_eval.pkl],
+    'regionv4_4_train': [kriso_ulsan_infos_regionv4_4_train.pkl], 'regionv4_4_val': [kriso_ulsan_infos_regionv4_4_val.pkl], 'regionv4_4_train_eval': [kriso_ulsan_infos_regionv4_4_train_eval.pkl],
+    # cross-site: train = Bangeojin port (ulsan 0609 + 1105 clockwise + counterclockwise), val = jangsaeng (other site)
+    'cross_site_train': [kriso_ulsan_infos_cross_site_train.pkl],
+    'cross_site_val': [kriso_ulsan_infos_cross_site_val.pkl],
+    'cross_site_train_eval': [kriso_ulsan_infos_cross_site_train_eval.pkl],   # train AP subset (as many frames as val)
+    # simulated data (boat points only, no background): all yaw_1000_1..5, and the training mixes real Bangeojin + sim
+    'sim_yaw': [kriso_ulsan_infos_sim_yaw.pkl],
+    'cross_site_train_yaw1000': [kriso_ulsan_infos_cross_site_train.pkl, kriso_ulsan_infos_sim_yaw1000.pkl],   # + yaw_1000_1
+    'cross_site_val_js': [kriso_ulsan_infos_cross_site_val_js.pkl],
+    'js_train_006': [kriso_ulsan_infos_js_train_006.pkl],   # Bangeojin + jangsaeng scene_006 (real-jangsaeng-frame value test, 2026-11-12)
+    'js_train_007': [kriso_ulsan_infos_js_train_007.pkl],   # Bangeojin + jangsaeng scene_007
+    'js_val_006': [kriso_ulsan_infos_js_val_006.pkl],
+    'js_val_007': [kriso_ulsan_infos_js_val_007.pkl],
+   # jangsaeng bag scenes 006 + 007 ONLY = the real Jangsaengpo (scene_000 is Bangeojin, 003/005 transit; found 2026-11-11)
+    'cross_site_train_dist1000': [kriso_ulsan_infos_cross_site_train.pkl, kriso_ulsan_infos_sim_dist1000.pkl],   # + dist_1000_1 (gap-filling sim, 2026-11-11)
+    'sim_dist1000': [kriso_ulsan_infos_sim_dist1000.pkl],
+    # v3 simulated data (2026-11-13: 76 real meshes, buoyancy, uniform length / distance / aspect, 1 layout per frame; fold-4 meshes)
+    # 2026-11-14 fold-2 sim experiment: ours = capture v3 with the fold-2 mesh set (56 real meshes), web = 13 web models scaled to the same
+    # uniform length draws; _1000/_2000 = first N frames of the 3,000; box bottoms trimmed to the lowest point - 0.4 m (make_sim_dist_sequence --trim_bottom)
+    # 2026-11-15 overnight: deployment sim (all 77 meshes, 2,000 fr) + fold-2 combos
+    # 5-fold sim table (2026-11-15): per-fold mesh sets, 2,000 fr each (fold 2 = first 2000 of sim_v3_fold2_3000, fold 4 = sim_v3_fold4_2000)
+    'sim_v3_fold0_1000': [kriso_ulsan_infos_sim_v3_fold0_1000.pkl],
+    'regionv4_0_train_ours1000': [kriso_ulsan_infos_regionv4_0_train.pkl, kriso_ulsan_infos_sim_v3_fold0_1000.pkl],
+    'sim_v3_fold0_2000': [kriso_ulsan_infos_sim_v3_fold0_2000.pkl],
+    'regionv4_0_train_ours2000': [kriso_ulsan_infos_regionv4_0_train.pkl, kriso_ulsan_infos_sim_v3_fold0_2000.pkl],
+    'sim_v3_fold0_3000': [kriso_ulsan_infos_sim_v3_fold0_3000.pkl],
+    'regionv4_0_train_ours3000': [kriso_ulsan_infos_regionv4_0_train.pkl, kriso_ulsan_infos_sim_v3_fold0_3000.pkl],
+    'sim_v3_fold1_1000': [kriso_ulsan_infos_sim_v3_fold1_1000.pkl],
+    'regionv4_1_train_ours1000': [kriso_ulsan_infos_regionv4_1_train.pkl, kriso_ulsan_infos_sim_v3_fold1_1000.pkl],
+    'sim_v3_fold1_2000': [kriso_ulsan_infos_sim_v3_fold1_2000.pkl],
+    'regionv4_1_train_ours2000': [kriso_ulsan_infos_regionv4_1_train.pkl, kriso_ulsan_infos_sim_v3_fold1_2000.pkl],
+    'sim_v3_fold1_3000': [kriso_ulsan_infos_sim_v3_fold1_3000.pkl],
+    'regionv4_1_train_ours3000': [kriso_ulsan_infos_regionv4_1_train.pkl, kriso_ulsan_infos_sim_v3_fold1_3000.pkl],
+    'sim_v3_fold3_1000': [kriso_ulsan_infos_sim_v3_fold3_1000.pkl],
+    'regionv4_3_train_ours1000': [kriso_ulsan_infos_regionv4_3_train.pkl, kriso_ulsan_infos_sim_v3_fold3_1000.pkl],
+    'sim_v3_fold3_2000': [kriso_ulsan_infos_sim_v3_fold3_2000.pkl],
+    'regionv4_3_train_ours2000': [kriso_ulsan_infos_regionv4_3_train.pkl, kriso_ulsan_infos_sim_v3_fold3_2000.pkl],
+    'sim_v3_fold3_3000': [kriso_ulsan_infos_sim_v3_fold3_3000.pkl],
+    'regionv4_3_train_ours3000': [kriso_ulsan_infos_regionv4_3_train.pkl, kriso_ulsan_infos_sim_v3_fold3_3000.pkl],
+    'sim_v3_all_1000': [kriso_ulsan_infos_sim_v3_all_1000.pkl],
+    'real_v4_ours1000': [kriso_ulsan_infos_real_v4.pkl, kriso_ulsan_infos_sim_v3_all_1000.pkl],
+    'sim_v3_all_2000': [kriso_ulsan_infos_sim_v3_all_2000.pkl],
+    'real_v4_ours2000': [kriso_ulsan_infos_real_v4.pkl, kriso_ulsan_infos_sim_v3_all_2000.pkl],
+    'sim_v3_all_3000': [kriso_ulsan_infos_sim_v3_all_3000.pkl],
+    'real_v4_ours3000': [kriso_ulsan_infos_real_v4.pkl, kriso_ulsan_infos_sim_v3_all_3000.pkl],
+    'regionv4_2_train_ours2000_web2000': [kriso_ulsan_infos_regionv4_2_train.pkl, kriso_ulsan_infos_sim_v3_fold2_2000.pkl, kriso_ulsan_infos_sim_web_2000.pkl],
+    'sim_v3_fold2_2000_thin': [kriso_ulsan_infos_sim_v3_fold2_2000_thin.pkl],
+    'sim_v3_fold2_3000_thin': [kriso_ulsan_infos_sim_v3_fold2_3000_thin.pkl],
+    'regionv4_2_train_ours2000thin': [kriso_ulsan_infos_regionv4_2_train.pkl, kriso_ulsan_infos_sim_v3_fold2_2000_thin.pkl],
+    'sim_v3_fold2_1000': [kriso_ulsan_infos_sim_v3_fold2_1000.pkl], 'sim_v3_fold2_2000': [kriso_ulsan_infos_sim_v3_fold2_2000.pkl], 'sim_v3_fold2_3000': [kriso_ulsan_infos_sim_v3_fold2_3000.pkl],
+    'sim_web_1000': [kriso_ulsan_infos_sim_web_1000.pkl], 'sim_web_2000': [kriso_ulsan_infos_sim_web_2000.pkl], 'sim_web_3000': [kriso_ulsan_infos_sim_web_3000.pkl],
+    'regionv4_2_train_ours1000': [kriso_ulsan_infos_regionv4_2_train.pkl, kriso_ulsan_infos_sim_v3_fold2_1000.pkl],
+    'regionv4_2_train_ours2000': [kriso_ulsan_infos_regionv4_2_train.pkl, kriso_ulsan_infos_sim_v3_fold2_2000.pkl],
+    'regionv4_2_train_ours3000': [kriso_ulsan_infos_regionv4_2_train.pkl, kriso_ulsan_infos_sim_v3_fold2_3000.pkl],
+    'regionv4_2_train_web1000': [kriso_ulsan_infos_regionv4_2_train.pkl, kriso_ulsan_infos_sim_web_1000.pkl],
+    'regionv4_2_train_web2000': [kriso_ulsan_infos_regionv4_2_train.pkl, kriso_ulsan_infos_sim_web_2000.pkl],
+    'regionv4_2_train_web3000': [kriso_ulsan_infos_regionv4_2_train.pkl, kriso_ulsan_infos_sim_web_3000.pkl],
+    # fold-4 sim experiment (2026-11-14, same recipe as fold 2; sim_v3_fold4 re-converted with --trim_bottom 0.4)
+    'regionv4_4_train_ours1000': [kriso_ulsan_infos_regionv4_4_train.pkl, kriso_ulsan_infos_sim_v3_fold4_1000.pkl],
+    'regionv4_4_train_ours2000': [kriso_ulsan_infos_regionv4_4_train.pkl, kriso_ulsan_infos_sim_v3_fold4_2000.pkl],
+    'regionv4_4_train_ours3000': [kriso_ulsan_infos_regionv4_4_train.pkl, kriso_ulsan_infos_sim_v3_fold4_3000.pkl],
+    'sim_v3_fold4_1000': [kriso_ulsan_infos_sim_v3_fold4_1000.pkl], 'sim_v3_fold4_2000': [kriso_ulsan_infos_sim_v3_fold4_2000.pkl], 'sim_v3_fold4_3000': [kriso_ulsan_infos_sim_v3_fold4_3000.pkl],
+    'regionv3_4_train_simv3_1000': [kriso_ulsan_infos_regionv3_4_train.pkl, kriso_ulsan_infos_sim_v3_fold4_1000.pkl],
+    'regionv3_4_train_simv3_2000': [kriso_ulsan_infos_regionv3_4_train.pkl, kriso_ulsan_infos_sim_v3_fold4_2000.pkl],
+    'regionv3_4_train_simv3_3000': [kriso_ulsan_infos_regionv3_4_train.pkl, kriso_ulsan_infos_sim_v3_fold4_3000.pkl],
+    'cross_site_train_dist1000_thin': [kriso_ulsan_infos_cross_site_train.pkl, kriso_ulsan_infos_sim_dist1000_thin.pkl],   # + dist_1000_1_thin (stochastic point dropout, p in column 4)
+    'sim_dist1000_thin': [kriso_ulsan_infos_sim_dist1000_thin.pkl],
+    'cross_site_train_yaw3000': [kriso_ulsan_infos_cross_site_train.pkl, kriso_ulsan_infos_sim_yaw3000.pkl],   # + yaw_1000_1..3
+    'fold0_train': [kriso_ulsan_infos_fold0_train.pkl],
+    'fold0_val': [kriso_ulsan_infos_fold0_val.pkl],
+    'fold0_train_eval': [kriso_ulsan_infos_fold0_train_eval.pkl],   # train AP subset
+    'fold1_train': [kriso_ulsan_infos_fold1_train.pkl],
+    'fold1_val': [kriso_ulsan_infos_fold1_val.pkl],
+    'fold1_train_eval': [kriso_ulsan_infos_fold1_train_eval.pkl],
+    'fold2_train': [kriso_ulsan_infos_fold2_train.pkl],
+    'fold2_val': [kriso_ulsan_infos_fold2_val.pkl],
+    'fold2_train_eval': [kriso_ulsan_infos_fold2_train_eval.pkl],
+    'fold3_train': [kriso_ulsan_infos_fold3_train.pkl],
+    'fold3_val': [kriso_ulsan_infos_fold3_val.pkl],
+    'fold3_train_eval': [kriso_ulsan_infos_fold3_train_eval.pkl],
+    'fold4_train': [kriso_ulsan_infos_fold4_train.pkl],
+    'fold4_val': [kriso_ulsan_infos_fold4_val.pkl],
+    'fold4_train_eval': [kriso_ulsan_infos_fold4_train_eval.pkl],
+}
+
+GET_ITEM_LIST: ["points"]
+
+DATA_AUGMENTOR:
+    DISABLE_AUG_LIST: ['placeholder']
+    AUG_CONFIG_LIST:
+        - NAME: gt_sampling
+          USE_ROAD_PLANE: False
+          # {train_split} is replaced by DATA_SPLIT.train: each fold has its own index (no validation object is pasted)
+          DB_INFO_PATH:
+              - kriso_ulsan_dbinfos_{train_split}.pkl
+          PREPARE: {
+             filter_by_visibility: True,   # same rule as LABEL_FILTER
+          }
+          # paste boats until a scene has 15 (labels per frame after LABEL_FILTER: median 10, 75% 14, 90% 20)
+          SAMPLE_GROUPS: ['boat:15']
+          NUM_POINT_FEATURES: 3
+          REMOVE_EXTRA_WIDTH: [0.0, 0.0, 0.0]
+          LIMIT_WHOLE_SCENE: True
+
+        - NAME: random_world_flip
+          ALONG_AXIS_LIST: ['x']
+
+        - NAME: random_world_rotation
+          WORLD_ROT_ANGLE: [-0.78539816, 0.78539816]
+
+        - NAME: random_world_scaling
+          WORLD_SCALE_RANGE: [0.95, 1.05]
+
+
+POINT_FEATURE_ENCODING: {
+    encoding_type: absolute_coordinates_encoding,
+    used_feature_list: ['x', 'y', 'z'],
+    src_feature_list: ['x', 'y', 'z'],
+}
+
+
+DATA_PROCESSOR:
+    - NAME: mask_points_and_boxes_outside_range
+      REMOVE_OUTSIDE_BOXES: True
+
+    - NAME: shuffle_points
+      SHUFFLE_ENABLED: {
+        'train': True,
+        'test': False
+      }
+
+    - NAME: transform_points_to_voxels
+      VOXEL_SIZE: [0.1, 0.1, 0.2]
+      MAX_POINTS_PER_VOXEL: 5
+      MAX_NUMBER_OF_VOXELS: {
+        'train': 160000,
+        'test': 400000
+      }

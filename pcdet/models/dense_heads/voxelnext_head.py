@@ -10,8 +10,24 @@ import copy
 from easydict import EasyDict
 
 
+class SparseDropout(nn.Module):
+    """element-wise dropout on the features of a sparse tensor (inverted dropout, identity in eval mode)"""
+
+    def __init__(self, p):
+        super().__init__()
+        self.p = float(p)
+
+    def forward(self, x):
+        return replace_feature(x, nn.functional.dropout(x.features, self.p, self.training))
+
+    def extra_repr(self):
+        return 'p=%g' % self.p
+
+
 class SeparateHead(nn.Module):
-    def __init__(self, input_channels, sep_head_dict, kernel_size, init_bias=-2.19, use_bias=False):
+    def __init__(self, input_channels, sep_head_dict, kernel_size, init_bias=-2.19, use_bias=False, dropout=0.0):
+        """dropout > 0: dropout on the features entering the output conv of every branch, i.e. after the last
+        BN + ReLU (no BN follows it, so there is no train / test variance shift; Li et al., CVPR 2019)"""
         super().__init__()
         self.sep_head_dict = sep_head_dict
 
@@ -26,6 +42,8 @@ class SeparateHead(nn.Module):
                     nn.BatchNorm1d(input_channels),
                     nn.ReLU()
                 ))
+            if dropout > 0:
+                fc_list.append(SparseDropout(dropout))
             fc_list.append(spconv.SubMConv2d(input_channels, output_channels, 1, bias=True, indice_key=cur_name+'out'))
             fc = nn.Sequential(*fc_list)
             if 'hm' in cur_name:
@@ -74,6 +92,17 @@ class VoxelNeXtHead(nn.Module):
                                     NMS_POST_MAXSIZE=nms_configs.NMS_POST_MAXSIZE[i]) for i in range(num_class)]
 
         self.double_flip = self.model_cfg.get('DOUBLE_FLIP', False)
+        # 'tilt' (roll, pitch) in HEAD_ORDER turns the head into a 9-DoF one: boxes are
+        # [x, y, z, dx, dy, dz, yaw, roll, pitch]. Without it nothing changes (7-DoF).
+        head_order = self.model_cfg.SEPARATE_HEAD_CFG.HEAD_ORDER
+        head_dict = self.model_cfg.SEPARATE_HEAD_CFG.HEAD_DICT
+        self.has_tilt = 'tilt' in head_order
+        assert all(name in head_dict for name in head_order), \
+            f'HEAD_ORDER {head_order} has entries missing from HEAD_DICT {list(head_dict.keys())}'
+        if self.has_tilt:
+            assert head_dict['tilt']['out_channels'] == 2, 'tilt head predicts (roll, pitch)'
+            assert not self.iou_branch, 'IOU_BRANCH only supports 7-DoF boxes'
+            assert not self.double_flip, 'DOUBLE_FLIP is not implemented for the tilt head'
         for cur_class_names in self.model_cfg.CLASS_NAMES_EACH_HEAD:
             self.class_names_each_head.append([x for x in cur_class_names if x in class_names])
             cur_class_id_mapping = torch.from_numpy(np.array(
@@ -98,6 +127,7 @@ class VoxelNeXtHead(nn.Module):
                     kernel_size=kernel_size_head,
                     init_bias=-2.19,
                     use_bias=self.model_cfg.get('USE_BIAS_BEFORE_NORM', False),
+                    dropout=self.model_cfg.get('DROPOUT', 0.0),
                 )
             )
         self.predict_boxes_when_training = predict_boxes_when_training
@@ -222,6 +252,8 @@ class VoxelNeXtHead(nn.Module):
 
             cur_class_id = (gt_boxes[k, -1] - 1).long()
             distance = self.distance(spatial_indices, center[k])
+            if distance.numel() == 0:  # the sample has no voxel at all (e.g. a frame without points), nothing to assign to
+                continue
             inds[k] = distance.argmin()
             mask[k] = 1
 
@@ -263,6 +295,9 @@ class VoxelNeXtHead(nn.Module):
             target_boxes = target_dicts['target_boxes'][idx]
             pred_boxes = torch.cat([pred_dict[head_name] for head_name in self.separate_head_cfg.HEAD_ORDER], dim=1)
 
+            assert pred_boxes.shape[-1] == target_boxes.shape[-1], (
+                f'regression channels ({pred_boxes.shape[-1]}, HEAD_ORDER={self.separate_head_cfg.HEAD_ORDER}) do not match '
+                f'the gt box columns ({target_boxes.shape[-1]}): check DATA_CONFIG.BOX_DOF against the tilt head')
             reg_loss = self.reg_loss_func(
                 pred_boxes, target_dicts['masks'][idx], target_dicts['inds'][idx], target_boxes, batch_index
             )
@@ -429,6 +464,7 @@ class VoxelNeXtHead(nn.Module):
             if self.double_flip:
                 batch_hm, batch_center, batch_center_z, batch_dim, batch_rot_cos, batch_rot_sin, batch_vel, batch_iou, voxel_indices_ = \
                 self.merge_double_flip(pred_dict, batch_size, voxel_indices.clone(), spatial_shape)
+                batch_tilt = None
             else:
                 batch_hm = pred_dict['hm'].sigmoid()
                 batch_center = pred_dict['center']
@@ -438,6 +474,7 @@ class VoxelNeXtHead(nn.Module):
                 batch_rot_sin = pred_dict['rot'][:, 1].unsqueeze(dim=1)
                 batch_iou = (pred_dict['iou'] + 1) * 0.5 if self.iou_branch else None
                 batch_vel = pred_dict['vel'] if 'vel' in self.separate_head_cfg.HEAD_ORDER else None
+                batch_tilt = pred_dict['tilt'] if self.has_tilt else None
                 voxel_indices_ = voxel_indices
 
             final_pred_dicts = centernet_utils.decode_bbox_from_voxels_nuscenes(
@@ -446,7 +483,7 @@ class VoxelNeXtHead(nn.Module):
                 rot_cos=batch_rot_cos,
                 rot_sin=batch_rot_sin,
                 center=batch_center, center_z=batch_center_z,
-                dim=batch_dim, vel=batch_vel, iou=batch_iou,
+                dim=batch_dim, vel=batch_vel, iou=batch_iou, tilt=batch_tilt,
                 point_cloud_range=self.point_cloud_range, voxel_size=self.voxel_size,
                 feature_map_stride=self.feature_map_stride,
                 K=post_process_cfg.MAX_OBJ_PER_SAMPLE,

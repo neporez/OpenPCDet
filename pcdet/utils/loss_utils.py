@@ -453,7 +453,11 @@ class RegLossSparse(nn.Module):
         batch_size = mask.shape[0]
         for bs_idx in range(batch_size):
             batch_inds = batch_index==bs_idx
-            pred.append(output[batch_inds][ind[bs_idx]])
+            sample_output = output[batch_inds]
+            if sample_output.shape[0] == 0:  # sample without any voxel: its mask is all 0, nothing to regress
+                pred.append(output.new_zeros((ind.shape[1], output.shape[1])))
+                continue
+            pred.append(sample_output[ind[bs_idx]])
         pred = torch.stack(pred)
 
         loss = _reg_loss(pred, target, mask)

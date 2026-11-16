@@ -10,7 +10,6 @@ import torch.distributed as dist
 
 from ...ops.iou3d_nms import iou3d_nms_utils
 from ...utils import box_utils, common_utils, calibration_kitti
-from pcdet.datasets.kitti.kitti_object_eval_python import kitti_common
 
 class DataBaseSampler(object):
     def __init__(self, root_path, sampler_cfg, class_names, logger=None):
@@ -127,6 +126,19 @@ class DataBaseSampler(object):
 
         return db_infos
 
+    def filter_by_visibility(self, db_infos, label_filter):
+        """keep only the objects that count as labels (utils/visibility_utils.py, LABEL_FILTER of the dataset config)"""
+        from ...utils import visibility_utils
+        for name, infos in db_infos.items():
+            if not infos:
+                continue
+            boxes = np.stack([info['box3d_lidar'] for info in infos])
+            keep = visibility_utils.is_label(boxes, [info['num_points_in_gt'] for info in infos], label_filter)
+            if self.logger is not None:
+                self.logger.info('Database filter by visibility %s: %d => %d' % (name, len(infos), int(keep.sum())))
+            db_infos[name] = [info for info, k in zip(infos, keep) if k]
+        return db_infos
+
     def sample_with_fixed_number(self, class_name, sample_group):
         """
         Args:
@@ -234,6 +246,7 @@ class DataBaseSampler(object):
         return data_dict
 
     def collect_image_crops_kitti(self, info, data_dict, obj_points, sampled_gt_boxes, sampled_gt_boxes2d, idx):
+        from pcdet.datasets.kitti.kitti_object_eval_python import kitti_common  # KITTI image augmentation only (the kitti dataset code was removed)
         calib_file = kitti_common.get_calib_path(int(info['image_idx']), self.root_path, relative_path=False)
         sampled_calib = calibration_kitti.Calibration(calib_file)
         points_2d, depth_2d = sampled_calib.lidar_to_img(obj_points[:,:3])
@@ -428,10 +441,20 @@ class DataBaseSampler(object):
             time_mask = np.logical_and(obj_points[:, -1] < max_time + 1e-6, obj_points[:, -1] > min_time - 1e-6)
             obj_points = obj_points[time_mask]
 
-        large_sampled_gt_boxes = box_utils.enlarge_box3d(
-            sampled_gt_boxes[:, 0:7], extra_width=self.sampler_cfg.REMOVE_EXTRA_WIDTH
-        )
-        points = box_utils.remove_points_in_boxes3d(points, large_sampled_gt_boxes)
+        if sampled_gt_boxes.shape[1] >= 9 and np.any(sampled_gt_boxes[:, 7:9] != 0):
+            # 9-DoF boxes with roll / pitch: remove the scene points inside the tilted boxes
+            from ...utils import box_rotation_utils
+            large_sampled_gt_boxes = sampled_gt_boxes.copy()
+            large_sampled_gt_boxes[:, 3:6] += np.asarray(self.sampler_cfg.REMOVE_EXTRA_WIDTH, dtype=large_sampled_gt_boxes.dtype)
+            inside = np.zeros(points.shape[0], dtype=bool)
+            for start in range(0, large_sampled_gt_boxes.shape[0], 8):
+                inside |= box_rotation_utils.points_in_boxes_9dof(points, large_sampled_gt_boxes[start:start + 8]).any(axis=0)
+            points = points[~inside]
+        else:
+            large_sampled_gt_boxes = box_utils.enlarge_box3d(
+                sampled_gt_boxes[:, 0:7], extra_width=self.sampler_cfg.REMOVE_EXTRA_WIDTH
+            )
+            points = box_utils.remove_points_in_boxes3d(points, large_sampled_gt_boxes)
         points = np.concatenate([obj_points[:, :points.shape[-1]], points], axis=0)
         gt_names = np.concatenate([gt_names, sampled_gt_names], axis=0)
         gt_boxes = np.concatenate([gt_boxes, sampled_gt_boxes], axis=0)

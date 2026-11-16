@@ -269,9 +269,16 @@ def _topk_1d(scores, batch_size, batch_idx, obj, K=40, nuscenes=False):
         topk_inds_list.append(topk_inds)
         topk_classes_list.append(topk_classes)
 
-    topk_score = torch.stack(topk_score_list)
-    topk_inds = torch.stack(topk_inds_list)
-    topk_classes = torch.stack(topk_classes_list)
+    # a sample with fewer than K voxels yields fewer than K candidates: pad with score 0 / index 0 so the
+    # batch can be stacked (the padded entries have score 0 and are dropped by the score threshold)
+    def pad_to_k(t):
+        if t.shape[0] >= K:
+            return t
+        return torch.cat([t, t.new_zeros((K - t.shape[0],) + tuple(t.shape[1:]))], dim=0)
+
+    topk_score = torch.stack([pad_to_k(t) for t in topk_score_list])
+    topk_inds = torch.stack([pad_to_k(t) for t in topk_inds_list])
+    topk_classes = torch.stack([pad_to_k(t) for t in topk_classes_list])
 
     return topk_score, topk_inds, topk_classes
 
@@ -283,13 +290,17 @@ def gather_feat_idx(feats, inds, batch_size, batch_idx):
     for bs_idx in range(batch_size):
         batch_inds = batch_idx==bs_idx
         feat = feats[batch_inds]
+        if feat.shape[0] == 0:  # sample without any voxel: nothing to gather, its (padded) candidates have score 0
+            feats_list.append(feats.new_zeros((_inds.shape[1], dim)))
+            continue
         feats_list.append(feat.gather(0, _inds[bs_idx]))
     feats = torch.stack(feats_list)
     return feats
 
 def decode_bbox_from_voxels_nuscenes(batch_size, indices, obj, rot_cos, rot_sin,
                             center, center_z, dim, vel=None, iou=None, point_cloud_range=None, voxel_size=None, voxels_3d=None,
-                            feature_map_stride=None, K=100, score_thresh=None, post_center_limit_range=None, add_features=None):
+                            feature_map_stride=None, K=100, score_thresh=None, post_center_limit_range=None, add_features=None,
+                            tilt=None):
     batch_idx = indices[:, 0]
     spatial_indices = indices[:, 1:]
     scores, inds, class_ids = _topk_1d(None, batch_size, batch_idx, obj, K=K, nuscenes=True)
@@ -313,6 +324,10 @@ def decode_bbox_from_voxels_nuscenes(batch_size, indices, obj, rot_cos, rot_sin,
     #zs = (spatial_indices[:, :, 0:1]) * feature_map_stride * voxel_size[2] + point_cloud_range[2] + center_z
 
     box_part_list = [xs, ys, center_z, dim, angle]
+
+    if not tilt is None:  # (roll, pitch) -> boxes are [x, y, z, dx, dy, dz, yaw, roll, pitch]
+        tilt = gather_feat_idx(tilt, inds, batch_size, batch_idx)
+        box_part_list.append(tilt)
 
     if not vel is None:
         vel = gather_feat_idx(vel, inds, batch_size, batch_idx)

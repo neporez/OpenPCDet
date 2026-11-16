@@ -16,3 +16,4 @@ venv/
 .vscode
 output
 version.py
+CLAUDE.md
